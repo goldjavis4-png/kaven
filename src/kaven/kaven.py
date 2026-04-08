@@ -23,8 +23,28 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 
 
+def _parse_env_value(raw_value: str) -> str:
+    """.env value 정리: 주석 제거, 따옴표 해제, 공백 유지 최소화."""
+    value = raw_value.strip()
+    if not value:
+        return ""
+
+    if value[:1] == value[-1:] and value[:1] in {'"', "'"}:
+        return value[1:-1]
+
+    if " #" in value:
+        value = value.split(" #", 1)[0].rstrip()
+
+    return value.strip().strip('"').strip("'")
+
+
 def _load_env_file(env_path: Path) -> None:
-    """간단한 .env 로더 (python-dotenv 의존성 제거)."""
+    """간단한 .env 로더.
+
+    - 빈 값(`KEY=`)은 기존 환경변수도 안전하게 unset
+    - 파일 값은 기존 환경보다 우선 (운영자가 .env로 명시 제어 가능)
+    - export KEY=value 형식 허용
+    """
     if not env_path.exists():
         return
 
@@ -32,12 +52,20 @@ def _load_env_file(env_path: Path) -> None:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
-        key, value = line.split("=", 1)
+
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+
+        key, raw_value = line.split("=", 1)
         key = key.strip()
         if not key:
             continue
-        value = value.strip().strip('"').strip("'")
-        os.environ.setdefault(key, value)
+
+        value = _parse_env_value(raw_value)
+        if value == "":
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
 
 _load_env_file(SCRIPT_DIR / ".env")
@@ -438,8 +466,15 @@ async def run_once():
     
     logger.info(f"로그 저장: {log_file}")
 
-    # Convex 클라우드에 저장 (Vercel 배포본용)
-    if events:
+    # Convex 업로드는 기본 OFF. 명시적으로 활성화한 경우에만 전송.
+    convex_enabled = os.getenv("KAVEN_ENABLE_CONVEX_UPLOAD", "0").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    convex_url = os.getenv(
+        "KAVEN_CONVEX_INGEST_URL",
+        "https://exciting-cod-257.convex.site/addMavenRun",
+    ).strip()
+    if events and convex_enabled and convex_url:
         try:
             import urllib.request
             payload = json.dumps({
@@ -449,7 +484,7 @@ async def run_once():
                 "signal_result": signal_result,
             }, ensure_ascii=False).encode("utf-8")
             req = urllib.request.Request(
-                "https://exciting-cod-257.convex.site/addMavenRun",
+                convex_url,
                 data=payload,
                 headers={"Content-Type": "application/json"},
                 method="POST",
@@ -458,6 +493,8 @@ async def run_once():
                 logger.info(f"Convex 저장 완료: {resp.read().decode()}")
         except Exception as e:
             logger.warning(f"Convex 저장 실패 (로컬 로그는 유지): {e}")
+    elif events:
+        logger.info("Convex 업로드 비활성화: 로컬 로그만 유지")
 
     logger.info(f"Kaven 실행 완료: {(end - start).total_seconds():.1f}초 소요")
     

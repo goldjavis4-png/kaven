@@ -10,9 +10,9 @@ import asyncio
 import json
 import logging
 import re
-import subprocess
 import urllib.parse
 import urllib.request
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,7 +31,7 @@ SEARCH_KEYWORDS = [
 ]
 
 PINCHTAB_BASE = "http://localhost:9867"
-SEARXNG_BASE = "http://localhost:8080"
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8080").rstrip("/")
 
 
 async def collect() -> list[dict[str, Any]]:
@@ -59,7 +59,7 @@ async def collect() -> list[dict[str, Any]]:
 async def _search_via_searxng(query: str) -> list[dict[str, Any]]:
     """SearxNG로 X 관련 뉴스 검색 (time_range 없이)."""
     encoded = urllib.parse.quote(f"{query} twitter OR x.com")
-    url = f"{SEARXNG_BASE}/search?q={encoded}&format=json&engines=brave,duckduckgo"
+    url = f"{SEARXNG_URL}/search?q={encoded}&format=json&engines=brave,duckduckgo"
 
     results = []
     try:

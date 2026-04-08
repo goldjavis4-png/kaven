@@ -82,3 +82,21 @@ def test_content_fingerprint_uses_numeric_and_source_context() -> None:
     fp_base = kaven._content_fingerprint(base)
     assert fp_base != kaven._content_fingerprint(different_number)
     assert fp_base != kaven._content_fingerprint(different_source)
+
+
+def test_parse_env_value_strips_inline_comment_and_quotes() -> None:
+    assert kaven._parse_env_value('"value" # comment') == 'value'
+    assert kaven._parse_env_value("value # comment") == 'value'
+
+
+def test_load_env_file_overrides_and_unsets(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / '.env'
+    env_file.write_text('FOO=from_file\nBAR=\nexport BAZ="quoted value"\n', encoding='utf-8')
+    monkeypatch.setenv('FOO', 'from_env')
+    monkeypatch.setenv('BAR', 'keep_me?')
+
+    kaven._load_env_file(env_file)
+
+    assert kaven.os.environ['FOO'] == 'from_file'
+    assert 'BAR' not in kaven.os.environ
+    assert kaven.os.environ['BAZ'] == 'quoted value'

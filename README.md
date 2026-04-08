@@ -55,10 +55,10 @@ Kaven은 AIS/ADS-B/뉴스/소셜 데이터를 수집하고, LLM 분석 + dedup �
 ### 2.4 소셜
 - 파일: `src/kaven/collectors/social_collector.py`
 - 소스:
-  - SearxNG 검색 우선
+  - SearxNG 검색 우선 (`SEARXNG_URL` 사용)
   - PinchTab 브라우저 폴백
 - 주의:
-  - 현재 `social_collector.py`는 `SEARXNG_URL` env 대신 내부 상수(`http://localhost:8080`)를 사용
+  - `SEARXNG_URL` 미설정 시 기본값은 `http://localhost:8080`
 
 ---
 
@@ -77,7 +77,7 @@ Kaven은 AIS/ADS-B/뉴스/소셜 데이터를 수집하고, LLM 분석 + dedup �
 
 ## 4) 기술 스택
 
-- Python 3.11+
+- Python 3.12 권장 (최소 3.11+)
 - `aiohttp`, `feedparser`, `websockets`
 - FastAPI + Uvicorn (웹 API)
 - Pytest (테스트)
@@ -93,7 +93,7 @@ Kaven은 AIS/ADS-B/뉴스/소셜 데이터를 수집하고, LLM 분석 + dedup �
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
-pip install aiohttp feedparser websockets fastapi uvicorn pytest
+pip install -r requirements.txt
 ```
 
 ### 5.2 `.env` 준비
@@ -114,13 +114,17 @@ OPENAI_MODEL=
 GEMINI_API_KEY=
 ANTHROPIC_API_KEY=
 
-# ===== 알림 =====
+# ===== 알림 (기본 안전 모드: 명시적으로 켜기 전까지 외부 발송 안 함) =====
+KAVEN_ENABLE_OUTBOUND=0
+KAVEN_ENABLE_URGENT_DM=0
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 TELEGRAM_TOPIC_MAVEN=5052
 TELEGRAM_USER_DM=
 
-# ===== 기타 =====
+# ===== 저장/기타 =====
+KAVEN_ENABLE_CONVEX_UPLOAD=0
+KAVEN_CONVEX_INGEST_URL=https://exciting-cod-257.convex.site/addMavenRun
 OPENCLAW_GATEWAY_URL=http://localhost:18789
 ENV
 ```
@@ -185,8 +189,9 @@ python -m http.server 8080 --directory webapp/frontend
 ### 자주 발생하는 문제
 - `CHAT_ID`가 아니라 `TELEGRAM_CHAT_ID`를 써야 함
 - `.env`는 루트가 아니라 `src/kaven/.env`에 있어야 자동 로드됨
+- `.env`에서 `KEY=`처럼 비우면 기존 셸 환경값도 안전하게 unset됨
 - SearxNG 미구동 시 뉴스/소셜 수집 저하
-- `Convex 저장 실패 (로컬 로그는 유지)`가 떠도 로컬 로그는 정상 저장됨
+- 기본값은 외부 outbound/Convex 업로드 비활성화이며, 필요 시 `KAVEN_ENABLE_OUTBOUND=1`, `KAVEN_ENABLE_CONVEX_UPLOAD=1`로 명시 활성화
 
 ---
 

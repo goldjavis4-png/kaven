@@ -25,6 +25,8 @@ python src/kaven/kaven.py --watch --interval 5
 
 ## 주의
 
-- `.env`는 `src/kaven/.env`에서 로드됩니다.
+- `.env`는 `src/kaven/.env`에서 로드되며, 빈 값(`KEY=`)은 기존 환경변수도 unset합니다.
 - 로컬 LLM 사용 시 `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`(선택)를 설정하면 OpenAI 호환 API로 분석할 수 있습니다.
+- 기본값은 안전 모드입니다: `KAVEN_ENABLE_OUTBOUND=1`을 주기 전까지 텔레그램 발송이 비활성화됩니다.
+- `KAVEN_ENABLE_CONVEX_UPLOAD=1`을 주기 전까지 Convex 업로드는 비활성화됩니다.
 - 테스트 및 웹앱 실행 방법은 루트 `README.md`를 참고하세요.

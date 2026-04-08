@@ -19,14 +19,14 @@ import aiohttp
 
 logger = logging.getLogger("maven.signal")
 
-# 텔레그램 설정
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "-1003868141703")
-TOPIC_MAVEN = int(os.getenv("TELEGRAM_TOPIC_MAVEN", "5052"))   # Maven 전용 토픽 (알리스 지시 2026-03-07)
-TOPIC_GEOPOLITICS = int(os.getenv("TELEGRAM_TOPIC_GEOPOLITICS", "37"))   # 레거시 (사용 안 함)
-TOPIC_INVESTMENT = int(os.getenv("TELEGRAM_TOPIC_INVESTMENT", "2"))       # 레거시 (사용 안 함)
-USER_DM = os.getenv("TELEGRAM_USER_DM", "40130797")
+# 텔레그램 설정 (기본값은 안전 우선: 명시적 env 없으면 외부 발송 안 함)
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TOPIC_MAVEN = int(os.getenv("TELEGRAM_TOPIC_MAVEN", "5052"))
+USER_DM = os.getenv("TELEGRAM_USER_DM", "").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-GATEWAY_URL = os.getenv("OPENCLAW_GATEWAY_URL", "http://localhost:18789")
+GATEWAY_URL = os.getenv("OPENCLAW_GATEWAY_URL", "http://localhost:18789").strip().rstrip("/")
+ENABLE_OUTBOUND = os.getenv("KAVEN_ENABLE_OUTBOUND", "0").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_DM = os.getenv("KAVEN_ENABLE_URGENT_DM", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 # Severity 이모지
 SEVERITY_EMOJI = {
@@ -82,8 +82,8 @@ async def process_signals(events: list[dict[str, Any]]) -> dict[str, Any]:
             f"| {event.get('signal', 'watch')}"
         )
         
-        # severity 3+: topic:5052 (Maven 전용) 알림만
-        if severity >= 3:
+        # severity 3+: outbound 활성화 + 대상 설정 시에만 알림
+        if severity >= 3 and ENABLE_OUTBOUND and CHAT_ID:
             try:
                 msg = _format_message(event)
                 await _send_telegram(msg, CHAT_ID, TOPIC_MAVEN)
@@ -93,8 +93,8 @@ async def process_signals(events: list[dict[str, Any]]) -> dict[str, Any]:
                 logger.error(f"topic:5052 알림 실패: {e}")
                 errors.append(str(e))
         
-        # severity 5: 개인 DM (긴급만)
-        if severity >= 5:
+        # severity 5: 개인 DM (기본 OFF, 명시 활성화 필요)
+        if severity >= 5 and ENABLE_OUTBOUND and ENABLE_DM and USER_DM:
             try:
                 msg = _format_urgent_message(event)
                 await _send_telegram_dm(msg, USER_DM)
@@ -104,6 +104,11 @@ async def process_signals(events: list[dict[str, Any]]) -> dict[str, Any]:
                 logger.error(f"긴급 DM 실패: {e}")
                 errors.append(str(e))
     
+    if not ENABLE_OUTBOUND:
+        logger.info("텔레그램 outbound 비활성화: 로그만 기록")
+    elif not CHAT_ID:
+        logger.info("TELEGRAM_CHAT_ID 미설정: 채널 발송 건너뜀")
+
     return {
         "sent": sent_count,
         "logged": logged_count,
