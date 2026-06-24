@@ -5,3 +5,5 @@ __pycache__/
 .DS_Store
 .env
 **/.env
+src/kaven/logs/maven_*.jsonl
+src/kaven/logs/sent_cache.json

@@ -9,6 +9,8 @@ severity 5:  알리스님 개인 DM 즉시 알림
 OpenClaw message API 우선 사용, 실패 시 Bot API 직접 호출.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -21,7 +23,8 @@ logger = logging.getLogger("maven.signal")
 
 # 텔레그램 설정 (기본값은 안전 우선: 명시적 env 없으면 외부 발송 안 함)
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-TOPIC_MAVEN = int(os.getenv("TELEGRAM_TOPIC_MAVEN", "5052"))
+TOPIC_MAVEN_RAW = os.getenv("TELEGRAM_TOPIC_MAVEN", "").strip()
+TOPIC_MAVEN = int(TOPIC_MAVEN_RAW) if TOPIC_MAVEN_RAW else None
 USER_DM = os.getenv("TELEGRAM_USER_DM", "").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 GATEWAY_URL = os.getenv("OPENCLAW_GATEWAY_URL", "http://localhost:18789").strip().rstrip("/")
@@ -198,9 +201,10 @@ async def _send_telegram(text: str, chat_id: str, thread_id: int):
             payload = {
                 "chat_id": chat_id,
                 "text": text,
-                "message_thread_id": thread_id,
                 "parse_mode": "HTML",
             }
+            if thread_id is not None:
+                payload["message_thread_id"] = thread_id
             async with session.post(
                 url, json=payload,
                 timeout=aiohttp.ClientTimeout(total=10),
@@ -220,8 +224,9 @@ async def _send_telegram_bot_api(text: str, chat_id: str, thread_id: int | None 
     payload = {
         "chat_id": chat_id,
         "text": text,
-        "message_thread_id": thread_id,
     }
+    if thread_id is not None:
+        payload["message_thread_id"] = thread_id
     
     async with aiohttp.ClientSession() as session:
         async with session.post(

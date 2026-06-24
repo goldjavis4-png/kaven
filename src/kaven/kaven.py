@@ -10,6 +10,8 @@ Kaven Smart System — 지정학 조기경보 + 투자 신호 시스템
     python3 kaven.py --watch    # 5분 간격 루프
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import hashlib

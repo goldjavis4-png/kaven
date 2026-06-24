@@ -5,9 +5,12 @@ OpenClaw 게이트웨이(localhost:18789) 또는 직접 Anthropic API 호출.
 지정학 이벤트 분석 → 투자 신호 생성.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
+from json import JSONDecodeError
 from datetime import datetime, timezone
 from typing import Any
 
@@ -82,7 +85,8 @@ async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
     openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip().rstrip("/")
     openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
     openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
-    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    gemini_key = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", "")).strip()
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     
     result = None
@@ -99,7 +103,7 @@ async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
 
     if result is None and gemini_key:
         try:
-            result = await _call_gemini(gemini_key, summary)
+            result = await _call_gemini(gemini_key, summary, gemini_model)
         except Exception as e:
             logger.warning(f"Gemini API 분석 실패: {e}")
     
@@ -138,6 +142,115 @@ async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
 
     return result
 
+
+
+
+def _strip_markdown_fence(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+        if text.lower().startswith("json\n"):
+            text = text[5:].strip()
+    return text
+
+
+def _extract_json_from_response(content: str) -> list[dict] | None:
+    cleaned = _strip_markdown_fence(content)
+    try:
+        parsed = json.loads(cleaned)
+        return parsed if isinstance(parsed, list) else None
+    except Exception:
+        pass
+    start = cleaned.find('[')
+    end = cleaned.rfind(']')
+    if start != -1 and end != -1 and end > start:
+        snippet = cleaned[start:end+1]
+        try:
+            parsed = json.loads(snippet)
+            return parsed if isinstance(parsed, list) else None
+        except Exception:
+            return None
+    return None
+
+
+def _balanced_json_prefix(text: str) -> str | None:
+    """문자열 앞부분에서 균형이 맞는 JSON 배열 prefix 추출.
+
+    Gemini가 fenced JSON을 쓰다가 max tokens 등으로 중간에 잘린 경우,
+    마지막으로 완전하게 닫힌 위치까지만 잘라 salvage하기 위한 helper.
+    """
+    start = text.find("[")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for idx in range(start, len(text)):
+        ch = text[idx]
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+            if depth == 0:
+                return text[start:idx + 1]
+
+    return None
+
+
+def _extract_complete_objects_from_array(text: str) -> list[dict]:
+    """배열/펜스/설명 텍스트 안에서 완전한 JSON object만 salvage."""
+    cleaned = _strip_markdown_fence(text)
+    start = cleaned.find("[")
+    if start == -1:
+        return []
+
+    decoder = json.JSONDecoder()
+    idx = start + 1
+    salvaged: list[dict] = []
+
+    while idx < len(cleaned):
+        while idx < len(cleaned) and cleaned[idx] in " \r\n\t,":
+            idx += 1
+        if idx >= len(cleaned) or cleaned[idx] == "]":
+            break
+
+        try:
+            value, next_idx = decoder.raw_decode(cleaned, idx)
+        except JSONDecodeError:
+            break
+
+        if isinstance(value, dict):
+            salvaged.append(value)
+        idx = next_idx
+
+    return salvaged
+
+
+def _coerce_event_list(value: Any) -> list[dict]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
 
 def _summarize_data(collected_data: dict[str, Any]) -> str:
     """수집 데이터를 분석용 텍스트로 요약 (토큰 절약)."""
@@ -256,9 +369,9 @@ async def _call_openai_compatible(
     return _parse_analysis_response(text)
 
 
-async def _call_gemini(api_key: str, summary: str) -> list[dict] | None:
+async def _call_gemini(api_key: str, summary: str, model: str) -> list[dict] | None:
     """Google Gemini API 호출."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     
     payload = {
         "contents": [
@@ -272,6 +385,7 @@ async def _call_gemini(api_key: str, summary: str) -> list[dict] | None:
         "generationConfig": {
             "maxOutputTokens": 2000,
             "temperature": 0.2,
+            "responseMimeType": "application/json",
         },
     }
     
@@ -383,45 +497,37 @@ async def _call_anthropic_direct(api_key: str, summary: str) -> list[dict] | Non
 
 
 def _parse_analysis_response(text: str) -> list[dict]:
-    """Claude 응답 텍스트에서 JSON 배열 추출."""
+    """LLM 응답 텍스트에서 JSON 배열을 최대한 견고하게 추출."""
     text = text.strip()
-    
-    # JSON 배열 직접 파싱 시도
-    try:
-        result = json.loads(text)
-        if isinstance(result, list):
-            return _dedup_events(result)
-        if isinstance(result, dict):
-            return [result]
-    except json.JSONDecodeError:
-        pass
-    
-    # 코드블록 내 JSON 추출
-    if "```" in text:
-        for block in text.split("```"):
-            block = block.strip()
-            if block.startswith("json"):
-                block = block[4:].strip()
-            try:
-                result = json.loads(block)
-                if isinstance(result, list):
-                    return _dedup_events(result)
-                if isinstance(result, dict):
-                    return [result]
-            except json.JSONDecodeError:
-                continue
-    
-    # [ ... ] 패턴 찾기
-    start = text.find("[")
-    end = text.rfind("]")
-    if start != -1 and end != -1 and end > start:
+
+    # 1) 전체/펜스 제거 후 직접 파싱
+    for candidate in (text, _strip_markdown_fence(text)):
         try:
-            result = json.loads(text[start:end + 1])
-            if isinstance(result, list):
-                return _dedup_events(result)
+            parsed = _coerce_event_list(json.loads(candidate))
+            if parsed:
+                return _dedup_events(parsed)
         except json.JSONDecodeError:
             pass
-    
+
+    # 2) 응답 내부의 완전한 JSON 배열 prefix 추출
+    balanced = _balanced_json_prefix(_strip_markdown_fence(text))
+    if balanced:
+        try:
+            parsed = _coerce_event_list(json.loads(balanced))
+            if parsed:
+                return _dedup_events(parsed)
+        except json.JSONDecodeError:
+            pass
+
+    # 3) 잘린 배열에서도 완전한 object들은 salvage
+    salvaged = _extract_complete_objects_from_array(text)
+    if salvaged:
+        logger.warning(
+            "분석 응답이 불완전하여 %d건 이벤트만 salvage했습니다.",
+            len(salvaged),
+        )
+        return _dedup_events(salvaged)
+
     logger.error(f"분석 응답 파싱 실패: {text[:200]}")
     return []
 
